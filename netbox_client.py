@@ -492,3 +492,84 @@ class NetBoxClient:
                         self.nb.extras.custom_fields.create(field)
                     except Exception as exc:
                         log.error("Could not create custom field %s: %s", field["name"], exc)
+
+    # Custom fields written by cs_exposure.py (Exposure Management correlation)
+    _CS_EXPOSURE_FIELDS: list[dict] = [
+        {
+            "name":         "cs_exposure_id",
+            "label":        "CS Exposure Asset ID",
+            "type":         "text",
+            "object_types": ["dcim.device"],
+            "description":  "CrowdStrike Exposure Management external asset ID. "
+                            "Set when this device was correlated with an internet-facing "
+                            "external asset discovered by the Exposure Management module.",
+            "required":     False,
+        },
+        {
+            "name":         "cs_exposure_criticality",
+            "label":        "CS Exposure Criticality",
+            "type":         "text",
+            "object_types": ["dcim.device"],
+            "description":  "Criticality assigned by CrowdStrike Exposure Management: "
+                            "critical | high | medium | low | unknown.",
+            "required":     False,
+        },
+        {
+            "name":         "cs_internet_exposed",
+            "label":        "CS Internet Exposed",
+            "type":         "boolean",
+            "object_types": ["dcim.device"],
+            "description":  "True when the device has been correlated with an entry in the "
+                            "CrowdStrike external exposure surface.",
+            "required":     False,
+        },
+        {
+            "name":         "cs_exposure_ports",
+            "label":        "CS Exposure Ports",
+            "type":         "json",
+            "object_types": ["dcim.device"],
+            "description":  "Open ports detected by CrowdStrike Exposure Management. "
+                            'Format: [{"port": 443, "protocol": "tcp", "service": "https"}, …]',
+            "required":     False,
+        },
+        {
+            "name":         "cs_exposure_first_seen",
+            "label":        "CS Exposure First Seen",
+            "type":         "text",
+            "object_types": ["dcim.device"],
+            "description":  "Timestamp when this device first appeared in the CrowdStrike "
+                            "external exposure surface (ISO 8601).",
+            "required":     False,
+        },
+        {
+            "name":         "cs_exposure_last_seen",
+            "label":        "CS Exposure Last Seen",
+            "type":         "text",
+            "object_types": ["dcim.device"],
+            "description":  "Timestamp of the most recent scan that detected this device "
+                            "in the CrowdStrike external exposure surface (ISO 8601).",
+            "required":     False,
+        },
+        {
+            "name":         "cs_exposure_match_method",
+            "label":        "CS Exposure Match Method",
+            "type":         "text",
+            "object_types": ["dcim.device"],
+            "description":  "How this device was correlated with its external exposure asset: "
+                            "exposure_id | public_ip | ipam_ip | hostname.",
+            "required":     False,
+        },
+    ]
+
+    def ensure_exposure_fields(self) -> None:
+        """Create the cs_exposure_* custom fields on dcim.device if absent."""
+        for field in self._CS_EXPOSURE_FIELDS:
+            if not self.nb.extras.custom_fields.get(name=field["name"]):
+                log.info("Creating custom field: %s on dcim.device", field["name"])
+                if not self.dry_run:
+                    try:
+                        self.nb.extras.custom_fields.create(field)
+                    except Exception as exc:
+                        log.error(
+                            "Could not create custom field %s: %s", field["name"], exc
+                        )

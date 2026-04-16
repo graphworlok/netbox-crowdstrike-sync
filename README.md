@@ -9,6 +9,7 @@ Standalone Python scripts that pull host and vulnerability data from CrowdStrike
 - **Device sync** (`cs_sync.py`) — creates or updates NetBox `dcim.device` records from CrowdStrike Falcon host inventory, including MAC addresses, interfaces, IP addresses, OS version, sensor metadata, containment status, ZTA score, and active detection counts
 - **MAC enrichment** (`cs_enrich.py`) — adds a `crowdstrike_url` field to entries in NetBox interface MAC tables so device records link back to the Falcon console
 - **Import helper** (`cs_import.py`) — one-shot import of hosts from a CSV or JSON export
+- **Exposure gap analysis** (`cs_exposure.py`) — correlates CrowdStrike Exposure Management external-surface assets with agent-managed devices in NetBox and reports three categories of gap (see [Exposure Gap Analysis](#exposure-gap-analysis))
 
 ---
 
@@ -21,6 +22,7 @@ Standalone Python scripts that pull host and vulnerability data from CrowdStrike
   - `Spotlight Vulnerabilities: Read` (required for `--vulns`)
   - `Zero Trust Assessment: Read` (required for `--zta`)
   - `Detections: Read` (required for `--detections`)
+  - `Exposure Management: Read` (required for `cs_exposure.py`)
 
 ---
 
@@ -134,6 +136,82 @@ python cs_import.py --dry-run hosts.json
 
 ---
 
+## Exposure Gap Analysis
+
+`cs_exposure.py` bridges two distinct CrowdStrike asset universes that use different IDs even when they represent the same physical device:
+
+| Asset type | CrowdStrike source | Primary identifier |
+|---|---|---|
+| Agent-managed | Hosts API | `crowdstrike_aid` (Falcon agent ID) |
+| External exposure | Exposure Management API | `cs_exposure_id` (external asset ID) |
+
+### How correlation works
+
+For each external-surface asset, the tool attempts to match it to a NetBox device using four strategies in priority order:
+
+1. `cs_exposure_id` custom field already set on the device (idempotent re-runs)
+2. `last_public_ip` custom field matches the external asset IP (highest-confidence new match)
+3. Any IPAM `ipam.ip_address` assigned to a device interface matches the external asset IP
+4. Device name / FQDN match (exact, then first DNS label)
+
+### Gap categories
+
+**GAP-1 — Unmanaged internet exposure**  
+An external asset found in the exposure surface has no matching NetBox device. This is an internet-facing IP or hostname with no Falcon sensor and no existing inventory record. These are the highest-risk gaps: unknown devices exposed to the internet.
+
+**GAP-2 — Managed device with public IP absent from the exposure surface**  
+A managed device has `last_public_ip` recorded by the Falcon agent, but that IP does not appear in any external asset. Could indicate a shared NAT egress address, a stale IP record in Falcon, or a genuine blind-spot in the external scan coverage.
+
+**GAP-3 — High-risk exposure on a managed but vulnerable device**  
+An external asset with `critical` or `high` criticality was matched to a managed device that has a ZTA score below the threshold (default 70) or has open critical/high Spotlight vulnerabilities.
+
+### Usage
+
+```bash
+# Full run: fetch, correlate, write exposure fields, print report
+python cs_exposure.py
+
+# Read-only: print the report without writing anything to NetBox
+python cs_exposure.py --dry-run
+
+# Report only high/critical external assets in GAP-1
+python cs_exposure.py --min-criticality high
+
+# Adjust the ZTA threshold for GAP-3 (default: 70)
+python cs_exposure.py --threshold 60
+
+# Create placeholder NetBox devices for unmatched GAP-1 assets
+# (assigned the 'cs-exposure-unmatched' role, tagged 'cs-internet-exposure')
+python cs_exposure.py --create-shadow
+
+# Write a machine-readable JSON report alongside stdout output
+python cs_exposure.py --report-json /tmp/exposure-gaps.json
+```
+
+### Custom fields written to matched devices
+
+| Field | Description |
+|---|---|
+| `cs_exposure_id` | CrowdStrike external asset ID |
+| `cs_exposure_criticality` | critical \| high \| medium \| low \| unknown |
+| `cs_internet_exposed` | `True` on all matched devices |
+| `cs_exposure_ports` | JSON list of open port/protocol/service entries |
+| `cs_exposure_first_seen` | First seen timestamp from Exposure Management |
+| `cs_exposure_last_seen` | Last seen timestamp from Exposure Management |
+| `cs_exposure_match_method` | How the device was correlated (see above) |
+
+All fields are created automatically on first run.
+
+### Recommended workflow
+
+1. Run `cs_sync.py` (or `cs_import.py`) to populate agent-managed device inventory and set `last_public_ip` on each device.
+2. Run `cs_exposure.py` to correlate the external exposure surface with that inventory.
+3. Review GAP-1 items — unmatched internet-facing assets — as the highest-priority findings.
+4. Review GAP-3 items to prioritise patching or containment for exposed devices with known weaknesses.
+5. Investigate GAP-2 items to determine whether `last_public_ip` values are stale or whether they represent a gap in the external scan.
+
+---
+
 ## What gets created in NetBox
 
 ### Devices (`dcim.device`)
@@ -198,6 +276,7 @@ netbox-crowdstrike-sync/
 ├── cs_sync.py          Main sync command (hosts, MACs, interfaces, custom fields)
 ├── cs_enrich.py        MAC table enrichment only
 ├── cs_import.py        One-shot import from CSV / JSON export
+├── cs_exposure.py      Exposure Management correlation and gap analysis
 ├── netbox_client.py    pynetbox wrapper: CRUD for devices, interfaces, MACs, custom fields
 ├── oui.py              IEEE OUI lookup (vendor name from MAC prefix)
 └── requirements.txt

@@ -2,9 +2,12 @@ from django.db import models
 from django.urls import reverse
 
 from ..choices import SyncStatusChoices, SyncSourceChoices
+from .querysets import PluginQuerySet
 
 
 class SyncLog(models.Model):
+    objects = PluginQuerySet.as_manager()
+
     source = models.CharField(
         max_length=20,
         choices=SyncSourceChoices,
